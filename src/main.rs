@@ -110,14 +110,64 @@ async fn create_person(
     ))
 }
 
+#[derive(Deserialize)]
+
+struct UpdatePersonReq{
+    first_name: Option<String>,           // Maps to `character varying(255)` in PostgreSQL
+    last_name: Option<String>,            // Maps to `character varying(255)` in PostgreSQL
+    birth_date: Option<chrono::NaiveDate>, // Maps to `date` in PostgreSQL
+    is_alive: Option<bool>,               // Maps to `boolean` in PostgreSQL
+    current_sex: Option<String>,  // Maps to `character varying(50)` in PostgreSQL
+    current_alias: Option<String>,// Maps to `character varying(255)` in PostgreSQL
+}
 async fn update_person(
-    State(pg_pool): State<PgPool>
+    State(pg_pool): State<PgPool>,
+    Path(person_id): Path<i32>,
+    Json(person): Json<UpdatePersonReq>
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
-    todo!()
+    sqlx::query!(
+        "
+        UPDATE people SET
+            first_name = $2,
+            last_name = $3,
+            birth_date = $4,
+            is_alive = $5, 
+            current_sex = $6,
+            current_alias = $7
+        WHERE person_id = $1
+        ",
+        person_id,
+        person.first_name,
+        person.last_name,
+        person.birth_date,
+        person.is_alive,
+        person.current_sex,
+        person.current_alias
+    ).execute(&pg_pool)
+    .await
+    .map_err(|e|{
+        (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({"success": false, "message": e.to_string()}).to_string()
+        )
+    })?;
+
+    Ok((StatusCode::OK, json!({"success": true}).to_string()))
 }
 
 async fn delete_person(
-    State(pg_pool): State<PgPool>
+    State(pg_pool): State<PgPool>,
+    Path(person_id): Path<i32>
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
-    todo!()
+    sqlx::query!("DELETE FROM people WHERE person_id = $1", person_id)
+        .execute(&pg_pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode:: INTERNAL_SERVER_ERROR,
+                json!({ "success": false, "message": e.to_string()}).to_string()
+            )
+        })?;
+
+    Ok((StatusCode::OK, json!({ "success": true}).to_string()))
 }
