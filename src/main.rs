@@ -37,6 +37,7 @@ async fn main() {
   let app = Router::new().route("/", get(|| async { "Hello World"}))
                     .route("/people", get(get_people).post(create_person))
                     .route("/people/:person_id", patch(update_person).delete(delete_person))
+                    .route("/names", get(get_names))
                     .with_state(dp_pool);
   //serve the app
   axum::serve(listener, app)
@@ -54,10 +55,36 @@ struct Person {
     current_sex: Option<String>,  // Maps to `character varying(50)` in PostgreSQL
     current_alias: Option<String>,// Maps to `character varying(255)` in PostgreSQL
 }
+
+#[derive(Serialize)]
+struct NameHistory{
+    history_id: i32,
+    person_id: i32,
+    name: String,
+    start_date: NaiveDate
+}
+
 async fn get_people(
     State(pg_pool): State<PgPool>,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
     let rows = sqlx::query_as!(Person, "SELECT * FROM people ORDER BY person_id")
+    .fetch_all(&pg_pool)
+    .await
+    .map_err(|e|{
+        (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({ "success": false, "message": e.to_string()}).to_string()
+        )
+    })?;
+    Ok((
+        StatusCode::OK,
+        json!({ "success": true, "data": rows }).to_string()
+    ))
+}
+async fn get_names(
+    State(pg_pool): State<PgPool>,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let rows = sqlx::query_as!(NameHistory, "SELECT history_id, person_id, name, start_date FROM name_history ORDER BY history_id")
     .fetch_all(&pg_pool)
     .await
     .map_err(|e|{
@@ -104,6 +131,18 @@ async fn create_person(
         json!({ "success": false, "message": e.to_string()}).to_string()
         )
     })?;
+    if let Some(first_name) = &person.first_name{
+        sqlx::query!(
+            "INSERT INTO name_history (person_id, name, start_date)
+            VALUES ($1, $2, CURRENT_DATE)", row.person_id, first_name
+        )
+        .execute(&pg_pool)
+        .await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"success": false, "message": e.to_string()}).to_string(),
+        ))?;
+    }
     Ok((
         StatusCode::OK,
         json!({ "success": true, "data": row }).to_string()
@@ -123,37 +162,90 @@ struct UpdatePersonReq{
 async fn update_person(
     State(pg_pool): State<PgPool>,
     Path(person_id): Path<i32>,
-    Json(person): Json<UpdatePersonReq>
+    Json(person): Json<UpdatePersonReq>,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
-    sqlx::query!(
-        "
-        UPDATE people SET
-            first_name = $2,
-            last_name = $3,
-            birth_date = $4,
-            is_alive = $5, 
-            current_sex = $6,
-            current_alias = $7
-        WHERE person_id = $1
-        ",
-        person_id,
-        person.first_name,
-        person.last_name,
-        person.birth_date,
-        person.is_alive,
-        person.current_sex,
-        person.current_alias
-    ).execute(&pg_pool)
-    .await
-    .map_err(|e|{
+    let mut query = "UPDATE people SET person_id = $1".to_owned();
+    let mut i = 2;
+
+    if person.first_name.is_some() {
+        query.push_str(&format!(", first_name = ${i}"));
+        i += 1;
+    }
+
+    if person.last_name.is_some() {
+        query.push_str(&format!(", last_name = ${i}"));
+        i += 1;
+    }
+
+    if person.birth_date.is_some() {
+        query.push_str(&format!(", birth_date = ${i}"));
+        i += 1;
+    }
+
+    if person.is_alive.is_some() {
+        query.push_str(&format!(", is_alive = ${i}"));
+        i += 1;
+    }
+
+    if person.current_sex.is_some() {
+        query.push_str(&format!(", current_sex = ${i}"));
+        i += 1;
+    }
+
+    if person.current_alias.is_some() {
+        query.push_str(&format!(", current_alias = ${i}"));
+    }
+
+    query.push_str(&format!(" WHERE person_id = $1"));
+
+    let mut s = sqlx::query(&query).bind(person_id);
+
+    if let Some(first_name) = &person.first_name {
+        s = s.bind(first_name);
+    }
+
+    if let Some(last_name) = &person.last_name {
+        s = s.bind(last_name);
+    }
+
+    if let Some(birth_date) = &person.birth_date {
+        s = s.bind(birth_date);
+    }
+
+    if let Some(is_alive) = person.is_alive {
+        s = s.bind(is_alive);
+    }
+
+    if let Some(current_sex) = &person.current_sex {
+        s = s.bind(current_sex);
+    }
+
+    if let Some(current_alias) = &person.current_alias {
+        s = s.bind(current_alias);
+    }
+
+    s.execute(&pg_pool).await.map_err(|e| {
         (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        json!({"success": false, "message": e.to_string()}).to_string()
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"success": false, "message": e.to_string()}).to_string(),
         )
     })?;
+    if let Some(first_name) = &person.first_name{
+        sqlx::query!(
+            "INSERT INTO name_history (person_id, name, start_date)
+            VALUES ($1, $2, CURRENT_DATE)", person_id, first_name
+        )
+        .execute(&pg_pool)
+        .await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"success": false, "message": e.to_string()}).to_string(),
+        ))?;
+    }
 
     Ok((StatusCode::OK, json!({"success": true}).to_string()))
 }
+
 
 async fn delete_person(
     State(pg_pool): State<PgPool>,
