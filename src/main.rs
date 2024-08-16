@@ -38,6 +38,8 @@ async fn main() {
                     .route("/people", get(get_people).post(create_person))
                     .route("/people/:person_id", patch(update_person).delete(delete_person))
                     .route("/names", get(get_names))
+                    .route("/sex", get(get_sex))
+                    .route("/aliases", get(get_alias))
                     .with_state(dp_pool);
   //serve the app
   axum::serve(listener, app)
@@ -64,6 +66,22 @@ struct NameHistory{
     start_date: NaiveDate
 }
 
+#[derive(Serialize)]
+struct AliasHistory{
+    history_id: i32,
+    person_id: i32,
+    alias: String,
+    start_date: NaiveDate
+}
+
+#[derive(Serialize)]
+struct SexHistory{
+    history_id: i32,
+    person_id: i32,
+    sex: String,
+    start_date: NaiveDate
+}
+
 async fn get_people(
     State(pg_pool): State<PgPool>,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
@@ -85,6 +103,42 @@ async fn get_names(
     State(pg_pool): State<PgPool>,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
     let rows = sqlx::query_as!(NameHistory, "SELECT history_id, person_id, name, start_date FROM name_history ORDER BY history_id")
+    .fetch_all(&pg_pool)
+    .await
+    .map_err(|e|{
+        (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({ "success": false, "message": e.to_string()}).to_string()
+        )
+    })?;
+    Ok((
+        StatusCode::OK,
+        json!({ "success": true, "data": rows }).to_string()
+    ))
+}
+
+async fn get_sex(
+    State(pg_pool): State<PgPool>,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let rows = sqlx::query_as!(SexHistory, "SELECT history_id, person_id, sex, start_date FROM sex_history ORDER BY history_id")
+    .fetch_all(&pg_pool)
+    .await
+    .map_err(|e|{
+        (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({ "success": false, "message": e.to_string()}).to_string()
+        )
+    })?;
+    Ok((
+        StatusCode::OK,
+        json!({ "success": true, "data": rows }).to_string()
+    ))
+}
+
+async fn get_alias(
+    State(pg_pool): State<PgPool>,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let rows = sqlx::query_as!(AliasHistory, "SELECT history_id, person_id, alias, start_date FROM alias_history ORDER BY history_id")
     .fetch_all(&pg_pool)
     .await
     .map_err(|e|{
@@ -135,6 +189,30 @@ async fn create_person(
         sqlx::query!(
             "INSERT INTO name_history (person_id, name, start_date)
             VALUES ($1, $2, CURRENT_DATE)", row.person_id, first_name
+        )
+        .execute(&pg_pool)
+        .await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"success": false, "message": e.to_string()}).to_string(),
+        ))?;
+    }
+    if let Some(current_sex) = &person.current_sex{
+        sqlx::query!(
+            "INSERT INTO sex_history (person_id, sex, start_date)
+            VALUES ($1, $2, CURRENT_DATE)", row.person_id, current_sex
+        )
+        .execute(&pg_pool)
+        .await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"success": false, "message": e.to_string()}).to_string(),
+        ))?;
+    }
+    if let Some(current_alias) = &person.current_alias{
+        sqlx::query!(
+            "INSERT INTO alias_history (person_id, alias, start_date)
+            VALUES ($1, $2, CURRENT_DATE)", row.person_id, current_alias
         )
         .execute(&pg_pool)
         .await
@@ -242,6 +320,31 @@ async fn update_person(
             json!({"success": false, "message": e.to_string()}).to_string(),
         ))?;
     }
+    if let Some(current_sex) = &person.current_sex{
+        sqlx::query!(
+            "INSERT INTO sex_history (person_id, sex, start_date)
+            VALUES ($1, $2, CURRENT_DATE)", person_id, current_sex
+        )
+        .execute(&pg_pool)
+        .await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"success": false, "message": e.to_string()}).to_string(),
+        ))?;
+    }
+    if let Some(current_alias) = &person.current_alias{
+        sqlx::query!(
+            "INSERT INTO alias_history (person_id, alias, start_date)
+            VALUES ($1, $2, CURRENT_DATE)", person_id, current_alias
+        )
+        .execute(&pg_pool)
+        .await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"success": false, "message": e.to_string()}).to_string(),
+        ))?;
+    }
+    
 
     Ok((StatusCode::OK, json!({"success": true}).to_string()))
 }
