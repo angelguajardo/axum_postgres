@@ -37,9 +37,10 @@ async fn main() {
   let app = Router::new().route("/", get(|| async { "Hello World"}))
                     .route("/people", get(get_people).post(create_person))
                     .route("/people/:person_id", patch(update_person).delete(delete_person))
-                    .route("/names", get(get_names))
-                    .route("/sex", get(get_sex))
-                    .route("/aliases", get(get_alias))
+                    .route("/names", get(get_names)) //to do, :person_id for specific person
+                    .route("/sex", get(get_sex)) //to do, :person_id for specific person
+                    .route("/aliases", get(get_alias)) //to do, :person_id for specific person
+                    .route("/aliases", get(get_guardian))//to do, :person_id for specific person
                     .with_state(dp_pool);
   //serve the app
   axum::serve(listener, app)
@@ -56,6 +57,11 @@ struct Person {
     is_alive: bool,               // Maps to `boolean` in PostgreSQL
     current_sex: Option<String>,  // Maps to `character varying(50)` in PostgreSQL
     current_alias: Option<String>,// Maps to `character varying(255)` in PostgreSQL
+    first_parent_id: Option<i32>,
+    first_parent_relationship: Option<String>,     // Maps to `character varying(50)`, can be NULL
+    second_parent_id: Option<i32>,                  // Maps to `integer`, can be NULL
+    second_parent_relationship: Option<String>,    // Maps to `character varying(50)`, can be NULL
+    guardian_id: Option<i32>,                       // Maps to `integer`, can be NULL
 }
 
 #[derive(Serialize)]
@@ -79,6 +85,14 @@ struct SexHistory{
     history_id: i32,
     person_id: i32,
     sex: String,
+    start_date: NaiveDate
+}
+
+#[derive(Serialize)]
+struct GuardianHistory{
+    history_id: i32,
+    person_id: i32,
+    guardian_id: i32,
     start_date: NaiveDate
 }
 
@@ -152,6 +166,23 @@ async fn get_alias(
         json!({ "success": true, "data": rows }).to_string()
     ))
 }
+async fn get_guardian(
+    State(pg_pool): State<PgPool>,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let rows = sqlx::query_as!(GuardianHistory, "SELECT history_id, person_id, guardian_id, start_date FROM guardian_history ORDER BY history_id")
+    .fetch_all(&pg_pool)
+    .await
+    .map_err(|e|{
+        (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({ "success": false, "message": e.to_string()}).to_string()
+        )
+    })?;
+    Ok((
+        StatusCode::OK,
+        json!({ "success": true, "data": rows }).to_string()
+    ))
+}
 #[derive(Deserialize)]
 
 struct CreatePersonReq {
@@ -161,6 +192,11 @@ struct CreatePersonReq {
     is_alive: bool,               // Maps to `boolean` in PostgreSQL
     current_sex: Option<String>,  // Maps to `character varying(50)` in PostgreSQL
     current_alias: Option<String>,// Maps to `character varying(255)` in PostgreSQL
+    first_parent_id: Option<i32>,
+    first_parent_relationship: Option<String>,     // Maps to `character varying(50)`, can be NULL
+    second_parent_id: Option<i32>,                  // Maps to `integer`, can be NULL
+    second_parent_relationship: Option<String>,    // Maps to `character varying(50)`, can be NULL
+    guardian_id: Option<i32>,                       // Maps to `integer`, can be NULL
 }
 #[derive(Serialize)]
 struct CreatePersonRow{
@@ -170,13 +206,18 @@ async fn create_person(
     State(pg_pool): State<PgPool>,
     Json(person): Json<CreatePersonReq>
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
-    let row = sqlx::query_as!(CreatePersonRow, "INSERT INTO people (first_name, last_name, birth_date, is_alive, current_sex, current_alias) VALUES ($1, $2, $3, $4, $5, $6) RETURNING person_id",
+    let row = sqlx::query_as!(CreatePersonRow, "INSERT INTO people (first_name, last_name, birth_date, is_alive, current_sex, current_alias, first_parent_id, first_parent_relationship, second_parent_id, second_parent_relationship, guardian_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING person_id",
     person.first_name,
     person.last_name,
     person.birth_date,
     person.is_alive,
     person.current_sex,
-    person.current_alias
+    person.current_alias,
+    person.first_parent_id,
+    person.first_parent_relationship,
+    person.second_parent_id,
+    person.second_parent_relationship,
+    person.guardian_id
     ).fetch_one(&pg_pool)
     .await
     .map_err(|e|{
@@ -221,6 +262,18 @@ async fn create_person(
             json!({"success": false, "message": e.to_string()}).to_string(),
         ))?;
     }
+    if let Some(guardian_id) = &person.guardian_id{
+        sqlx::query!(
+            "INSERT INTO guardian_history (person_id, guardian_id, start_date)
+            VALUES ($1, $2, CURRENT_DATE)", row.person_id, guardian_id
+        )
+        .execute(&pg_pool)
+        .await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"success": false, "message": e.to_string()}).to_string(),
+        ))?;
+    }
     Ok((
         StatusCode::OK,
         json!({ "success": true, "data": row }).to_string()
@@ -236,6 +289,7 @@ struct UpdatePersonReq{
     is_alive: Option<bool>,               // Maps to `boolean` in PostgreSQL
     current_sex: Option<String>,  // Maps to `character varying(50)` in PostgreSQL
     current_alias: Option<String>,// Maps to `character varying(255)` in PostgreSQL
+    guardian_id: Option<i32>
 }
 async fn update_person(
     State(pg_pool): State<PgPool>,
@@ -273,6 +327,11 @@ async fn update_person(
     if person.current_alias.is_some() {
         query.push_str(&format!(", current_alias = ${i}"));
     }
+    
+    if person.guardian_id.is_some() {
+        query.push_str(&format!(", guardian_id = ${i}"));
+        i += 1;
+    }
 
     query.push_str(&format!(" WHERE person_id = $1"));
 
@@ -300,6 +359,10 @@ async fn update_person(
 
     if let Some(current_alias) = &person.current_alias {
         s = s.bind(current_alias);
+    }
+
+    if let Some(guardian_id) = person.guardian_id {
+        s = s.bind(guardian_id);
     }
 
     s.execute(&pg_pool).await.map_err(|e| {
@@ -336,6 +399,18 @@ async fn update_person(
         sqlx::query!(
             "INSERT INTO alias_history (person_id, alias, start_date)
             VALUES ($1, $2, CURRENT_DATE)", person_id, current_alias
+        )
+        .execute(&pg_pool)
+        .await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"success": false, "message": e.to_string()}).to_string(),
+        ))?;
+    }
+    if let Some(guardian_id) = &person.guardian_id{
+        sqlx::query!(
+            "INSERT INTO guardian_history (person_id, guardian_id, start_date)
+            VALUES ($1, $2, CURRENT_DATE)", person_id, guardian_id
         )
         .execute(&pg_pool)
         .await
