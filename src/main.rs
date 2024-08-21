@@ -299,6 +299,102 @@ async fn create_person(
 }
 
 #[derive(Deserialize)]
+struct CreateMarriageRequest {
+    person_a_id: i32,
+    person_b_id: i32
+}
+
+#[derive(Deserialize)]
+struct CreateDivorceRequest {
+    person_a_id: i32,
+    person_b_id: i32
+}
+async fn create_marriage(
+    State(pg_pool): State<PgPool>,
+    Json(new_marriage): Json<CreateMarriageRequest>
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let existing_marriage = sqlx::query!(
+        "Select marriage_id FROM marriages
+        Where (person_a_id = $1 OR person_b_id = $1 OR person_a_id = $2 OR person_b_id = $2)
+        AND is_active = True",
+        new_marriage.person_a_id,
+        new_marriage.person_b_id
+    )
+    .fetch_optional(&pg_pool)
+    .await
+    .map_err(|e|(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({"success": false, "message" : e.to_string()}).to_string(),
+    ))?;
+
+    if existing_marriage.is_some() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            json!({"success": false, "message": "One of these people is already married"}).to_string()
+        ));
+    }
+    sqlx::query!(
+        "INSERT INTO marriages (person_a_id, person_b_id, marriage_date) VALUES ($1, $2, CURRENT_DATE)",
+        new_marriage.person_a_id,
+        new_marriage.person_b_id
+    )
+    .execute(&pg_pool)
+    .await
+    .map_err(|e|(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({"success": false, "message" : e.to_string()}).to_string(),
+    ))?;
+    Ok((StatusCode::OK, json!({"success": true, "message": "Marriage Created"}).to_string()))
+}
+
+async fn create_divorce(
+    State(pg_pool): State<PgPool>,
+    Json(divorce_request): Json<CreateDivorceRequest>
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    let active_marriage = sqlx::query!(
+        "SELECT marriage_id FROM marriages
+        WHERE (person_a_id = $1 and person_b_id = $2) OR (person_a_id = $2 AND person_b_id = $1) 
+        AND is_active = TRUE",
+        divorce_request.person_a_id,
+        divorce_request.person_b_id
+    )
+    .fetch_optional(&pg_pool)
+    .await
+    .map_err(|e|(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({"success": false, "message": e.to_string()}).to_string(),
+    ))?;
+    if active_marriage.is_none(){
+        return Err((
+            StatusCode::BAD_REQUEST,
+            json!({"success": false, "message": "No active marriage found for this beautiful couple"}).to_string(),
+        ));
+    }
+    let marriage_id = active_marriage.unwrap().marriage_id;
+    sqlx::query!(
+        "UPDATE marriages SET is_active = FALSE WHERE marriage_id = $1",
+        marriage_id
+    )
+    .execute(&pg_pool)
+    .await
+    .map_err(|e|(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({"success": false,  "message": e.to_string()}).to_string(),
+    ))?;
+
+    sqlx::query!(
+        "INSERT INTO divorces (marriage_id, divorce_date) VALUES ($1, CURRENT_DATE)",
+        marriage_id
+    )
+    .execute(&pg_pool)
+    .await
+    .map_err(|e|(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({"success": false, "message": e.to_string()}).to_string(),
+    ))?;
+    Ok((StatusCode::OK, json!({"success": true, "message": "Divorce processed succesfully"}).to_string()))
+}
+#[derive(Deserialize)]
 
 struct UpdatePersonReq{
     first_name: Option<String>,           // Maps to `character varying(255)` in PostgreSQL
