@@ -40,7 +40,7 @@ async fn main() {
                     .route("/names", get(get_names)) //to do, :person_id for specific person
                     .route("/sex", get(get_sex)) //to do, :person_id for specific person
                     .route("/aliases", get(get_alias)) //to do, :person_id for specific person
-                    .route("/aliases", get(get_guardian))//to do, :person_id for specific person
+                    .route("/guardians", get(get_guardian))//to do, :person_id for specific person
                     .with_state(dp_pool);
   //serve the app
   axum::serve(listener, app)
@@ -99,7 +99,7 @@ struct GuardianHistory{
 async fn get_people(
     State(pg_pool): State<PgPool>,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
-    let rows = sqlx::query_as!(Person, "SELECT * FROM people ORDER BY person_id")
+    let rows = sqlx::query_as!(Person, "SELECT person_id, first_name, last_name, birth_date, is_alive, current_sex, current_alias, first_parent_id, first_parent_relationship, second_parent_id, second_parent_relationship, guardian_id  FROM people ORDER BY person_id")
     .fetch_all(&pg_pool)
     .await
     .map_err(|e|{
@@ -274,6 +274,24 @@ async fn create_person(
             json!({"success": false, "message": e.to_string()}).to_string(),
         ))?;
     }
+    if let Some(first_parent_id) = &person.first_parent_id {
+        // Second parent can be null
+        sqlx::query!(
+            "INSERT INTO birth_parents (person_id, first_parent_id, second_parent_id, first_parent_relationship, second_parent_relationship)
+            VALUES ($1, $2, $3, $4, $5)",
+            row.person_id,          
+            first_parent_id,
+            person.second_parent_id,
+            person.first_parent_relationship, 
+            person.second_parent_relationship
+        )
+        .execute(&pg_pool)
+        .await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"success": false, "message": e.to_string()}).to_string(),
+        ))?;
+    }
     Ok((
         StatusCode::OK,
         json!({ "success": true, "data": row }).to_string()
@@ -300,37 +318,37 @@ async fn update_person(
     let mut i = 2;
 
     if person.first_name.is_some() {
-        query.push_str(&format!(", first_name = ${i}"));
+        query.push_str(&format!(", first_name = ${}", i));
         i += 1;
     }
 
     if person.last_name.is_some() {
-        query.push_str(&format!(", last_name = ${i}"));
+        query.push_str(&format!(", last_name = ${}", i));
         i += 1;
     }
 
     if person.birth_date.is_some() {
-        query.push_str(&format!(", birth_date = ${i}"));
+        query.push_str(&format!(", birth_date = ${}", i));
         i += 1;
     }
 
     if person.is_alive.is_some() {
-        query.push_str(&format!(", is_alive = ${i}"));
+        query.push_str(&format!(", is_alive = ${}", i));
         i += 1;
     }
 
     if person.current_sex.is_some() {
-        query.push_str(&format!(", current_sex = ${i}"));
+        query.push_str(&format!(", current_sex = ${}", i));
         i += 1;
     }
 
     if person.current_alias.is_some() {
-        query.push_str(&format!(", current_alias = ${i}"));
+        query.push_str(&format!(", current_alias = ${}", i));
+        i +=1 ;
     }
-    
+
     if person.guardian_id.is_some() {
-        query.push_str(&format!(", guardian_id = ${i}"));
-        i += 1;
+        query.push_str(&format!(", guardian_id = ${}", i));
     }
 
     query.push_str(&format!(" WHERE person_id = $1"));
